@@ -1,4 +1,3 @@
-```cpp
 #include <GarrysMod/Lua/Interface.h>
 #include <GarrysMod/ModuleLoader.hpp>
 #include <GarrysMod/InterfacePointers.hpp>
@@ -78,4 +77,3 @@ GMOD_MODULE_OPEN() {
 
     return 0;
 }
-```
