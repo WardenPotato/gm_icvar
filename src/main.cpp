@@ -36,24 +36,12 @@ LUA_FUNCTION(SetValue) {
     return 0;
 }
 
-LUA_FUNCTION(RemoveCallback) {
-    LUA->CheckString(1);
-    const char* convar_str = LUA->GetString(1);
-
-    ConVar* found_cvar = GetConvar(convar_str, LUA);
-
-    found_cvar->UnsetCallback();
-
-    return 0;
-}
 
 GMOD_MODULE_OPEN() {
     LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
     LUA->CreateTable();
         LUA->PushCFunction(SetValue);
         LUA->SetField(-2, "SetValue");
-        LUA->PushCFunction(RemoveCallback);
-        LUA->SetField(-2, "RemoveCallback");
     LUA->SetField(-2, "icvar");
     LUA->Pop();
 
