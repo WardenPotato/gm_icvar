@@ -10,7 +10,7 @@ jobs:
     with:
       PROJECT_NAME: "icvar"
       BUILD_64x: "true"
-      REALM: "sv"
+      REALM: "cl"
       ARTIFACT_EXPIRE: "30"
       RELEASE_DRAFT: false
       RELEASE_LATEST: true
