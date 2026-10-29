@@ -9,27 +9,29 @@ ConVar* GetConvar(
     const char* convar_str,
     GarrysMod::Lua::ILuaBase* LUA
 ) {
-    // Diagnostic 1: Check whether the ICvar interface exists.
-    ICvar* icvar = InterfacePointers::Cvar();
+    static SourceSDK::FactoryLoader loader("vstdlib");
+
+    ICvar* icvar =
+        loader.GetInterface<ICvar>("VEngineCvar007");
 
     if (!icvar) {
         LUA->ThrowError(
-            "DIAGNOSTIC: ICvar interface is null"
+            "DIAGNOSTIC: vstdlib factory could not provide "
+            "VEngineCvar007"
         );
         return nullptr;
     }
 
-    // Diagnostic 2: Check whether the convar lookup succeeds.
-    ConVar* found_cvar = icvar->FindVar(convar_str);
+    ConVar* convar = icvar->FindVar(convar_str);
 
-    if (!found_cvar) {
+    if (!convar) {
         LUA->ThrowError(
-            "DIAGNOSTIC: FindVar returned null"
+            "DIAGNOSTIC: ICvar found, but FindVar returned null"
         );
         return nullptr;
     }
 
-    return found_cvar;
+    return convar;
 }
 
 LUA_FUNCTION(SetValue) {

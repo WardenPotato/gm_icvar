@@ -14,6 +14,8 @@ jobs:
       ARTIFACT_EXPIRE: "30"
       RELEASE_DRAFT: false
       RELEASE_LATEST: true
+      BUILD_32x: "false"
+      BUILD_LINUX: "false"
       SOURCESDK_MINIMAL: "danielga/sourcesdk-minimal"
       SOURCESDK_MINIMAL_BRANCH: "master"
       GARRYSMOD_COMMON: "danielga/garrysmod_common"
