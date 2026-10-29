@@ -516,8 +516,8 @@ public:
 
 	// Added
     void UnsetCallback(){
-        if(this->m_fnChangeCallback){
-            this->m_fnChangeCallback = emptyCallback;
+        if(this->m_fnChangeCallbacks){
+            this->m_fnChangeCallbacks = emptyCallback;
         }
     }
 
