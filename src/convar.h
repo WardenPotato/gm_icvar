@@ -35,7 +35,7 @@
 #error "implement me"
 #endif
 
-
+void emptyCallback( IConVar *var, const char *pOldValue, float flOldValue) { return; }
 //-----------------------------------------------------------------------------
 // Uncomment me to test for threading issues for material system convars
 // NOTE: You want to disable all threading when you do this
@@ -513,6 +513,13 @@ public:
 	{
 		return m_Value;
 	}
+
+	// Added
+    void UnsetCallback(){
+        if(this->m_fnChangeCallback){
+            this->m_fnChangeCallback = emptyCallback;
+        }
+    }
 
 private:
 	bool						InternalSetColorFromString( const char *value );
