@@ -8,19 +8,30 @@
 
 #include <cstdio>
 
-// Scan vstdlib for available VEngineCvar interface versions.
-// This only checks whether the factory returns a non-null pointer;
-// it does not call methods on the returned interfaces.
+// Print a diagnostic message through Garry's Mod's Lua print().
+static void LuaPrint(GarrysMod::Lua::ILuaBase* LUA, const char* message)
+{
+    LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+    LUA->GetField(-1, "print");
+    LUA->PushString(message);
+    LUA->Call(1, 0);
+    LUA->Pop();
+}
+
+// Scan the vstdlib factory for candidate VEngineCvar interface versions.
+// A non-null result only means the factory accepts that interface name.
 LUA_FUNCTION(ListCvarInterfaces)
 {
     SourceSDK::FactoryLoader loader("vstdlib");
 
     if (!loader.IsValid()) {
-        LUA->Msg("[icvar] ERROR: vstdlib module or CreateInterface unavailable\n");
+        LuaPrint(LUA,
+            "[icvar] ERROR: vstdlib or its CreateInterface export is unavailable");
         return 0;
     }
 
-    LUA->Msg("[icvar] Scanning VEngineCvar001 through VEngineCvar099...\n");
+    LuaPrint(LUA,
+        "[icvar] Scanning VEngineCvar001 through VEngineCvar099...");
 
     int found = 0;
     char name[64];
@@ -32,26 +43,16 @@ LUA_FUNCTION(ListCvarInterfaces)
         void* iface = loader.GetInterface<void>(name);
 
         if (iface != nullptr) {
-            std::snprintf(
-                message,
-                sizeof(message),
-                "[icvar] FOUND: %s\n",
-                name
-            );
-
-            LUA->Msg(message);
+            std::snprintf(message, sizeof(message),
+                "[icvar] FOUND: %s", name);
+            LuaPrint(LUA, message);
             ++found;
         }
     }
 
-    std::snprintf(
-        message,
-        sizeof(message),
-        "[icvar] Scan complete. Found %d candidate(s).\n",
-        found
-    );
-
-    LUA->Msg(message);
+    std::snprintf(message, sizeof(message),
+        "[icvar] Scan complete. Found %d candidate(s).", found);
+    LuaPrint(LUA, message);
 
     return 0;
 }
@@ -63,9 +64,7 @@ static ICvar* GetICvar(GarrysMod::Lua::ILuaBase* LUA)
     if (icvar == nullptr) {
         LUA->ThrowError(
             "ICvar interface is null. Run icvar.ListCvarInterfaces() "
-            "to inspect available interface versions."
-        );
-        return nullptr;
+            "to inspect available versions.");
     }
 
     return icvar;
@@ -73,19 +72,14 @@ static ICvar* GetICvar(GarrysMod::Lua::ILuaBase* LUA)
 
 static ConVar* GetConvar(
     const char* convar_str,
-    GarrysMod::Lua::ILuaBase* LUA
-)
+    GarrysMod::Lua::ILuaBase* LUA)
 {
     ICvar* icvar = GetICvar(LUA);
-
-    if (icvar == nullptr)
-        return nullptr;
 
     ConVar* found_cvar = icvar->FindVar(convar_str);
 
     if (found_cvar == nullptr) {
         LUA->ThrowError("Could not find convar");
-        return nullptr;
     }
 
     return found_cvar;
@@ -99,9 +93,6 @@ LUA_FUNCTION(SetValue)
     const int type = LUA->GetType(2);
 
     ConVar* found_cvar = GetConvar(convar_str, LUA);
-
-    if (found_cvar == nullptr)
-        return 0;
 
     if (type == GarrysMod::Lua::Type::NUMBER) {
         const float new_value =
