@@ -907,6 +907,52 @@ LUA_FUNCTION(SetValue)
     return 0;
 }
 
+LUA_FUNCTION(TestFindVarLiteral)
+{
+    ICvar* icvar = GetICvar(LUA);
+
+    if (icvar == nullptr)
+        return 0;
+
+    static const char requested[] = "r_3dsky";
+
+    LogDiagnostic(
+        LUA,
+        "[test] Literal address: %p",
+        static_cast<const void*>(requested)
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[test] Literal contents: '%s'",
+        requested
+    );
+
+    // No Lua-provided string pointer involved.
+    ConVar* result = icvar->FindVar(requested);
+
+    LogPointer(
+        LUA,
+        "[test] FindVar literal result",
+        result
+    );
+
+    if (result != nullptr)
+    {
+        IConVar* interface = static_cast<IConVar*>(result);
+
+        const char* actualName = interface->GetName();
+
+        LogDiagnostic(
+            LUA,
+            "[test] Engine GetName: '%s'",
+            actualName != nullptr ? actualName : "<null>"
+        );
+    }
+
+    return 0;
+}
+
 // ============================================================
 // Module entry point
 // ============================================================
@@ -937,6 +983,9 @@ GMOD_MODULE_OPEN()
 
     LUA->PushCFunction(DiagnoseConVar);
     LUA->SetField(-2, "DiagnoseConVar");
+
+    LUA->PushCFunction(TestFindVarLiteral);
+    LUA->SetField(-2, "TestFindVarLiteral");
 
     LUA->SetField(-2, "icvar");
 
