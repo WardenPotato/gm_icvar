@@ -6,11 +6,77 @@
 #include "convar.h"
 
 #include <cstdio>
+#include <cstdarg>
 #include <cstdint>
 
-// ------------------------------------------------------------
-// Diagnostic output through Garry's Mod's Lua print().
-// ------------------------------------------------------------
+// ============================================================
+// Persistent diagnostic logging
+// ============================================================
+
+static FILE* g_DiagnosticLog = nullptr;
+
+static void InitDiagnosticLog()
+{
+    if (g_DiagnosticLog != nullptr)
+        return;
+
+    g_DiagnosticLog = std::fopen(
+        "garrysmod/data/icvar_diagnostic.log",
+        "a"
+    );
+
+    if (g_DiagnosticLog != nullptr)
+    {
+        std::fprintf(
+            g_DiagnosticLog,
+            "\n========== ICVAR DIAGNOSTIC SESSION ==========\n"
+        );
+
+        std::fflush(g_DiagnosticLog);
+    }
+}
+
+static void LogDiagnostic(
+    GarrysMod::Lua::ILuaBase* LUA,
+    const char* format,
+    ...)
+{
+    char message[1024];
+
+    va_list args;
+    va_start(args, format);
+
+    std::vsnprintf(
+        message,
+        sizeof(message),
+        format,
+        args
+    );
+
+    va_end(args);
+
+    // In-game output.
+    if (LUA != nullptr)
+        LuaPrint(LUA, message);
+
+    // Persistent output.
+    InitDiagnosticLog();
+
+    if (g_DiagnosticLog != nullptr)
+    {
+        std::fprintf(
+            g_DiagnosticLog,
+            "%s\n",
+            message
+        );
+
+        std::fflush(g_DiagnosticLog);
+    }
+}
+
+// ============================================================
+// Lua output helper
+// ============================================================
 
 static void LuaPrint(
     GarrysMod::Lua::ILuaBase* LUA,
@@ -23,22 +89,21 @@ static void LuaPrint(
     LUA->Pop();
 }
 
+// ============================================================
+// Pointer logging
+// ============================================================
+
 static void LogPointer(
     GarrysMod::Lua::ILuaBase* LUA,
     const char* label,
     const void* pointer)
 {
-    char message[256];
-
-    std::snprintf(
-        message,
-        sizeof(message),
+    LogDiagnostic(
+        LUA,
         "[icvar] %s = %p",
         label,
         pointer
     );
-
-    LuaPrint(LUA, message);
 }
 
 static void LogInteger(
@@ -46,22 +111,20 @@ static void LogInteger(
     const char* label,
     long long value)
 {
-    char message[256];
-
-    std::snprintf(
-        message,
-        sizeof(message),
+    LogDiagnostic(
+        LUA,
         "[icvar] %s = %lld",
         label,
         value
     );
-
-    LuaPrint(LUA, message);
 }
 
-// ------------------------------------------------------------
-// Inspect a vtable without invoking its entries.
-// ------------------------------------------------------------
+// ============================================================
+// Vtable inspection
+//
+// This reads the object's vtable pointer and a bounded number
+// of entries. It does not invoke any virtual functions.
+// ============================================================
 
 static void DumpVtable(
     GarrysMod::Lua::ILuaBase* LUA,
@@ -69,50 +132,73 @@ static void DumpVtable(
     const void* object,
     int count)
 {
-    if (object == nullptr) {
-        LuaPrint(LUA, "[icvar] Cannot inspect a null object");
+    LogDiagnostic(
+        LUA,
+        "[diag] Beginning vtable inspection: %s",
+        label
+    );
+
+    if (object == nullptr)
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] ERROR: %s object is null",
+            label
+        );
+
         return;
     }
 
-    char message[256];
+    LogDiagnostic(
+        LUA,
+        "[diag] Reading vtable pointer for %s",
+        label
+    );
 
     void** vtable = *reinterpret_cast<void***>(
         const_cast<void*>(object)
     );
 
-    std::snprintf(
-        message,
-        sizeof(message),
-        "[icvar] %s object=%p vtable=%p",
+    LogDiagnostic(
+        LUA,
+        "[diag] %s object=%p vtable=%p",
         label,
         object,
         static_cast<void*>(vtable)
     );
 
-    LuaPrint(LUA, message);
+    if (vtable == nullptr)
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] ERROR: %s vtable is null",
+            label
+        );
 
-    if (vtable == nullptr) {
-        LuaPrint(LUA, "[icvar] ERROR: null vtable");
         return;
     }
 
-    for (int i = 0; i < count; ++i) {
-        std::snprintf(
-            message,
-            sizeof(message),
-            "[icvar] %s vtable[%02d] = %p",
+    for (int i = 0; i < count; ++i)
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] %s vtable[%02d] = %p",
             label,
             i,
             vtable[i]
         );
-
-        LuaPrint(LUA, message);
     }
+
+    LogDiagnostic(
+        LUA,
+        "[diag] Finished vtable inspection: %s",
+        label
+    );
 }
 
-// ------------------------------------------------------------
-// Obtain ICvar directly from vstdlib.
-// ------------------------------------------------------------
+// ============================================================
+// ICvar interface acquisition
+// ============================================================
 
 static ICvar* GetICvar(
     GarrysMod::Lua::ILuaBase* LUA)
@@ -121,106 +207,153 @@ static ICvar* GetICvar(
     static ICvar* icvar = nullptr;
     static bool attempted = false;
 
-    if (!attempted) {
+    if (!attempted)
+    {
         attempted = true;
 
-        LuaPrint(LUA, "[icvar] Initializing VEngineCvar004");
+        LogDiagnostic(
+            LUA,
+            "[icvar] Initializing VEngineCvar004"
+        );
 
-        if (!loader.IsValid()) {
-            LuaPrint(
+        if (!loader.IsValid())
+        {
+            LogDiagnostic(
                 LUA,
                 "[icvar] ERROR: vstdlib loader is invalid"
             );
         }
-        else {
+        else
+        {
+            LogDiagnostic(
+                LUA,
+                "[icvar] vstdlib loader is valid"
+            );
+
             icvar = loader.GetInterface<ICvar>(
                 "VEngineCvar004"
             );
 
-            LogPointer(LUA, "ICvar interface", icvar);
+            LogPointer(
+                LUA,
+                "ICvar interface",
+                icvar
+            );
         }
     }
 
-    if (icvar == nullptr) {
+    if (icvar == nullptr)
+    {
+        LogDiagnostic(
+            LUA,
+            "[icvar] ERROR: Could not obtain VEngineCvar004"
+        );
+
         LUA->ThrowError(
             "[icvar] Could not obtain VEngineCvar004"
         );
+
         return nullptr;
     }
 
     return icvar;
 }
 
-// ------------------------------------------------------------
-// Find a convar.
-// ------------------------------------------------------------
+// ============================================================
+// Find a convar
+// ============================================================
 
 static ConVar* GetConvar(
     const char* name,
     GarrysMod::Lua::ILuaBase* LUA)
 {
-    LuaPrint(LUA, "[icvar] Obtaining ICvar");
+    LogDiagnostic(
+        LUA,
+        "[icvar] GetConvar: obtaining ICvar"
+    );
 
     ICvar* icvar = GetICvar(LUA);
 
     if (icvar == nullptr)
         return nullptr;
 
-    LogPointer(LUA, "ICvar before FindVar", icvar);
+    LogPointer(
+        LUA,
+        "ICvar before FindVar",
+        icvar
+    );
 
-    char message[256];
-
-    std::snprintf(
-        message,
-        sizeof(message),
+    LogDiagnostic(
+        LUA,
         "[icvar] Calling FindVar(\"%s\")",
         name
     );
 
-    LuaPrint(LUA, message);
-
+    // This is the first engine virtual call in this function.
     ConVar* convar = icvar->FindVar(name);
 
-    LogPointer(LUA, "FindVar result", convar);
+    LogPointer(
+        LUA,
+        "FindVar result",
+        convar
+    );
 
-    if (convar == nullptr) {
-        LUA->ThrowError("[icvar] FindVar returned null");
+    if (convar == nullptr)
+    {
+        LogDiagnostic(
+            LUA,
+            "[icvar] ERROR: FindVar returned null"
+        );
+
+        LUA->ThrowError(
+            "[icvar] FindVar returned null"
+        );
+
         return nullptr;
     }
 
-    LuaPrint(LUA, "[icvar] FindVar completed successfully");
+    LogDiagnostic(
+        LUA,
+        "[icvar] FindVar completed successfully"
+    );
 
     return convar;
 }
 
-// ------------------------------------------------------------
-// Scan candidate interface versions.
-// ------------------------------------------------------------
+// ============================================================
+// Scan candidate interface versions
+// ============================================================
 
 LUA_FUNCTION(ListCvarInterfaces)
 {
-    LuaPrint(
+    LogDiagnostic(
         LUA,
         "[icvar] === Interface factory scan started ==="
     );
 
     SourceSDK::FactoryLoader loader("vstdlib");
 
-    if (!loader.IsValid()) {
-        LuaPrint(
+    if (!loader.IsValid())
+    {
+        LogDiagnostic(
             LUA,
             "[icvar] ERROR: vstdlib or CreateInterface unavailable"
         );
+
         return 0;
     }
 
-    LuaPrint(LUA, "[icvar] vstdlib loader is valid");
+    LogDiagnostic(
+        LUA,
+        "[icvar] vstdlib loader is valid"
+    );
 
     int found = 0;
-    char name[64];
-    char message[256];
 
-    for (int i = 1; i <= 99; ++i) {
+    char name[64];
+
+    for (int i = 1; i <= 99; ++i)
+    {
         std::snprintf(
             name,
             sizeof(name),
@@ -231,19 +364,19 @@ LUA_FUNCTION(ListCvarInterfaces)
         void* interfacePointer =
             loader.GetInterface<void>(name);
 
-        if (interfacePointer != nullptr) {
-            std::snprintf(
-                message,
-                sizeof(message),
+        if (interfacePointer != nullptr)
+        {
+            LogDiagnostic(
+                LUA,
                 "[icvar] FOUND %s at %p",
                 name,
                 interfacePointer
             );
 
-            LuaPrint(LUA, message);
             ++found;
 
-            if (i == 4) {
+            if (i == 4)
+            {
                 DumpVtable(
                     LUA,
                     "VEngineCvar004",
@@ -254,38 +387,33 @@ LUA_FUNCTION(ListCvarInterfaces)
         }
     }
 
-    std::snprintf(
-        message,
-        sizeof(message),
+    LogDiagnostic(
+        LUA,
         "[icvar] === Scan finished: %d candidates ===",
         found
     );
 
-    LuaPrint(LUA, message);
-
     return 0;
 }
 
-// ------------------------------------------------------------
-// Inspect the primary ConVar vtable.
-// ------------------------------------------------------------
+// ============================================================
+// Inspect primary ConVar vtable
+// ============================================================
 
 LUA_FUNCTION(InspectConVar)
 {
-    LUA->CheckType(1, GarrysMod::Lua::Type::STRING);
+    LUA->CheckType(
+        1,
+        GarrysMod::Lua::Type::STRING
+    );
 
     const char* name = LUA->GetString(1);
 
-    char message[256];
-
-    std::snprintf(
-        message,
-        sizeof(message),
+    LogDiagnostic(
+        LUA,
         "[icvar] === InspectConVar(\"%s\") ===",
         name
     );
-
-    LuaPrint(LUA, message);
 
     ConVar* convar = GetConvar(name, LUA);
 
@@ -299,74 +427,143 @@ LUA_FUNCTION(InspectConVar)
         20
     );
 
-    LuaPrint(LUA, "[icvar] Primary inspection complete");
+    LogDiagnostic(
+        LUA,
+        "[icvar] Primary inspection completed"
+    );
 
     return 0;
 }
 
-// ------------------------------------------------------------
-// Inspect both ConVar and IConVar subobjects.
+// ============================================================
+// Diagnose primary and secondary interface pointers
 //
-// This function does not call any setter.
-// ------------------------------------------------------------
+// IMPORTANT:
+// - Does not call GetName().
+// - Does not call IsFlagSet().
+// - Does not call SetValue().
+// - Logs every checkpoint to disk.
+// ============================================================
 
 LUA_FUNCTION(DiagnoseConVar)
 {
-    LUA->CheckType(1, GarrysMod::Lua::Type::STRING);
+    LUA->CheckType(
+        1,
+        GarrysMod::Lua::Type::STRING
+    );
 
     const char* name = LUA->GetString(1);
 
-    char message[256];
-
-    std::snprintf(
-        message,
-        sizeof(message),
-        "[icvar] === DiagnoseConVar(\"%s\") ===",
+    LogDiagnostic(
+        LUA,
+        "[diag 0] Starting diagnosis for %s",
         name
     );
 
-    LuaPrint(LUA, message);
+    // --------------------------------------------------------
+    // Layer 1: FindVar
+    // --------------------------------------------------------
 
-    // Layer 1: FindVar.
-    LuaPrint(LUA, "[layer 1] Finding ConVar");
+    LogDiagnostic(
+        LUA,
+        "[diag 1] Before GetConvar"
+    );
 
     ConVar* convar = GetConvar(name, LUA);
 
     if (convar == nullptr)
         return 0;
 
-    // Layer 2: Obtain the secondary base pointer.
-    LuaPrint(LUA, "[layer 2] Obtaining IConVar subobject");
+    LogDiagnostic(
+        LUA,
+        "[diag 2] FindVar succeeded"
+    );
 
-    IConVar* iconvar = static_cast<IConVar*>(convar);
+    // --------------------------------------------------------
+    // Layer 2: Primary pointer
+    // --------------------------------------------------------
 
-    LogPointer(LUA, "ConVar*", convar);
-    LogPointer(LUA, "IConVar*", iconvar);
+    LogPointer(
+        LUA,
+        "ConVar primary pointer",
+        convar
+    );
 
-    const auto convarAddress =
+    LogDiagnostic(
+        LUA,
+        "[diag 3] Primary pointer logged"
+    );
+
+    // --------------------------------------------------------
+    // Layer 3: Primary vtable
+    // --------------------------------------------------------
+
+    DumpVtable(
+        LUA,
+        "ConVar primary",
+        convar,
+        20
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[diag 4] Primary vtable completed"
+    );
+
+    // --------------------------------------------------------
+    // Layer 4: Secondary base pointer adjustment
+    // --------------------------------------------------------
+
+    LogDiagnostic(
+        LUA,
+        "[diag 5] Before IConVar cast"
+    );
+
+    IConVar* iconvar =
+        static_cast<IConVar*>(convar);
+
+    LogDiagnostic(
+        LUA,
+        "[diag 6] After IConVar cast"
+    );
+
+    LogPointer(
+        LUA,
+        "IConVar secondary pointer",
+        iconvar
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[diag 7] Secondary pointer logged"
+    );
+
+    // --------------------------------------------------------
+    // Layer 5: Pointer adjustment amount
+    // --------------------------------------------------------
+
+    const std::intptr_t convarAddress =
         reinterpret_cast<std::intptr_t>(convar);
 
-    const auto iconvarAddress =
+    const std::intptr_t iconvarAddress =
         reinterpret_cast<std::intptr_t>(iconvar);
 
     LogInteger(
         LUA,
         "IConVar pointer adjustment",
-        static_cast<long long>(iconvarAddress - convarAddress)
+        static_cast<long long>(
+            iconvarAddress - convarAddress
+        )
     );
 
-    // Layer 3: Dump the primary vtable.
-    LuaPrint(LUA, "[layer 3] Primary vtable");
-
-    DumpVtable(
+    LogDiagnostic(
         LUA,
-        "ConVar primary",
-        convar,
-        20
+        "[diag 8] Pointer adjustment calculated"
     );
 
-    // Layer 4: Dump the secondary vtable.
-    LuaPrint(LUA, "[layer 4] IConVar vtable");
+    // --------------------------------------------------------
+    // Layer 6: Secondary vtable
+    // --------------------------------------------------------
 
     DumpVtable(
         LUA,
@@ -375,107 +572,85 @@ LUA_FUNCTION(DiagnoseConVar)
         5
     );
 
-    // Layer 5: Test non-mutating virtual calls.
-    // These are declared in the supplied IConVar header:
-    //
-    // 0 SetValue(const char*)
-    // 1 SetValue(float)
-    // 2 SetValue(int)
-    // 3 GetName() const
-    // 4 IsFlagSet(int) const
-    //
-    // No setter is invoked here.
-
-    LuaPrint(LUA, "[layer 5] Calling IConVar::GetName");
-
-    const char* actualName = iconvar->GetName();
-
-    std::snprintf(
-        message,
-        sizeof(message),
-        "[icvar] IConVar::GetName returned: %s",
-        actualName != nullptr ? actualName : "<null>"
-    );
-
-    LuaPrint(LUA, message);
-
-    LuaPrint(LUA, "[layer 5] Calling IConVar::IsFlagSet(0)");
-
-    const bool flagsResult = iconvar->IsFlagSet(0);
-
-    LuaPrint(
+    LogDiagnostic(
         LUA,
-        flagsResult
-            ? "[icvar] IsFlagSet(0) returned true"
-            : "[icvar] IsFlagSet(0) returned false"
+        "[diag 9] Secondary vtable completed"
     );
 
-    LuaPrint(LUA, "[icvar] === Diagnosis complete ===");
+    // --------------------------------------------------------
+    // No virtual calls in this diagnostic pass.
+    // --------------------------------------------------------
+
+    LogDiagnostic(
+        LUA,
+        "[diag 10] Diagnosis completed without virtual calls"
+    );
 
     return 0;
 }
 
-// ------------------------------------------------------------
-// Original SetValue function.
-//
-// Retained for compatibility, but not used by the diagnostic.
-// ------------------------------------------------------------
+// ============================================================
+// Original SetValue function
+// ============================================================
 
 LUA_FUNCTION(SetValue)
 {
-    LUA->CheckType(1, GarrysMod::Lua::Type::STRING);
+    LUA->CheckType(
+        1,
+        GarrysMod::Lua::Type::STRING
+    );
 
     const char* name = LUA->GetString(1);
+
     const int type = LUA->GetType(2);
 
-    char message[256];
-
-    std::snprintf(
-        message,
-        sizeof(message),
+    LogDiagnostic(
+        LUA,
         "[icvar] === SetValue(\"%s\") started ===",
         name
     );
-
-    LuaPrint(LUA, message);
 
     ConVar* convar = GetConvar(name, LUA);
 
     if (convar == nullptr)
         return 0;
 
-    if (type == GarrysMod::Lua::Type::NUMBER) {
+    if (type == GarrysMod::Lua::Type::NUMBER)
+    {
         const float value =
             static_cast<float>(LUA->GetNumber(2));
 
-        LuaPrint(
+        LogDiagnostic(
             LUA,
-            "[icvar] Calling ConVar::SetValue(float)"
+            "[icvar] Calling ConVar::SetValue(float): %.9g",
+            static_cast<double>(value)
         );
 
         convar->SetValue(value);
 
-        LuaPrint(
+        LogDiagnostic(
             LUA,
             "[icvar] ConVar::SetValue(float) returned"
         );
     }
-    else if (type == GarrysMod::Lua::Type::STRING) {
+    else if (type == GarrysMod::Lua::Type::STRING)
+    {
         const char* value = LUA->GetString(2);
 
-        LuaPrint(
+        LogDiagnostic(
             LUA,
             "[icvar] Calling ConVar::SetValue(string)"
         );
 
         convar->SetValue(value);
 
-        LuaPrint(
+        LogDiagnostic(
             LUA,
             "[icvar] ConVar::SetValue(string) returned"
         );
     }
-    else {
+    else
+    {
         LUA->ArgError(
             2,
             "Expected a number or string"
@@ -484,20 +659,31 @@ LUA_FUNCTION(SetValue)
         return 0;
     }
 
-    LuaPrint(LUA, "[icvar] === SetValue completed ===");
+    LogDiagnostic(
+        LUA,
+        "[icvar] === SetValue completed ==="
+    );
 
     return 0;
 }
 
-// ------------------------------------------------------------
-// Module entry points.
-// ------------------------------------------------------------
+// ============================================================
+// Module entry point
+// ============================================================
 
 GMOD_MODULE_OPEN()
 {
-    LuaPrint(LUA, "[icvar] Module loaded");
+    InitDiagnosticLog();
 
-    LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+    LogDiagnostic(
+        LUA,
+        "[icvar] Module loaded"
+    );
+
+    LUA->PushSpecial(
+        GarrysMod::Lua::SPECIAL_GLOB
+    );
+
     LUA->CreateTable();
 
     LUA->PushCFunction(SetValue);
@@ -513,18 +699,36 @@ GMOD_MODULE_OPEN()
     LUA->SetField(-2, "DiagnoseConVar");
 
     LUA->SetField(-2, "icvar");
+
     LUA->Pop();
 
     return 0;
 }
 
+// ============================================================
+// Module close
+// ============================================================
+
 GMOD_MODULE_CLOSE()
 {
+    LogDiagnostic(
+        LUA,
+        "[icvar] Module closing"
+    );
+
     LUA->PushNil();
+
     LUA->SetField(
         GarrysMod::Lua::SPECIAL_GLOB,
         "icvar"
     );
+
+    if (g_DiagnosticLog != nullptr)
+    {
+        std::fflush(g_DiagnosticLog);
+        std::fclose(g_DiagnosticLog);
+        g_DiagnosticLog = nullptr;
+    }
 
     return 0;
 }
