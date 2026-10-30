@@ -443,149 +443,55 @@ LUA_FUNCTION(InspectConVar)
 // - Logs every checkpoint to disk.
 // ============================================================
 
+
 LUA_FUNCTION(DiagnoseConVar)
 {
-    LUA->CheckType(
-        1,
-        GarrysMod::Lua::Type::STRING
-    );
+    LUA->CheckType(1, GarrysMod::Lua::Type::STRING);
 
     const char* name = LUA->GetString(1);
 
-    LogDiagnostic(
-        LUA,
-        "[diag 0] Starting diagnosis for %s",
-        name
-    );
-
-    // --------------------------------------------------------
-    // Layer 1: FindVar
-    // --------------------------------------------------------
-
-    LogDiagnostic(
-        LUA,
-        "[diag 1] Before GetConvar"
-    );
+    LogDiagnostic(LUA, "[diag] Starting read-only virtual tests");
 
     ConVar* convar = GetConvar(name, LUA);
 
     if (convar == nullptr)
         return 0;
 
-    LogDiagnostic(
-        LUA,
-        "[diag 2] FindVar succeeded"
-    );
+    LogDiagnostic(LUA, "[diag] Before IConVar cast");
 
-    // --------------------------------------------------------
-    // Layer 2: Primary pointer
-    // --------------------------------------------------------
+    IConVar* iconvar = static_cast<IConVar*>(convar);
 
-    LogPointer(
-        LUA,
-        "ConVar primary pointer",
-        convar
-    );
+    LogPointer(LUA, "IConVar pointer", iconvar);
+
+    LogDiagnostic(LUA, "[diag] Before GetName()");
+
+    const char* actualName = iconvar->GetName();
+
+    LogDiagnostic(LUA, "[diag] GetName() returned");
 
     LogDiagnostic(
         LUA,
-        "[diag 3] Primary pointer logged"
+        "[diag] GetName result: %s",
+        actualName != nullptr ? actualName : "<null>"
     );
 
-    // --------------------------------------------------------
-    // Layer 3: Primary vtable
-    // --------------------------------------------------------
+    LogDiagnostic(LUA, "[diag] Before IsFlagSet(0)");
 
-    DumpVtable(
-        LUA,
-        "ConVar primary",
-        convar,
-        20
-    );
+    const bool flags = iconvar->IsFlagSet(0);
+
+    LogDiagnostic(LUA, "[diag] IsFlagSet(0) returned");
 
     LogDiagnostic(
         LUA,
-        "[diag 4] Primary vtable completed"
+        "[diag] IsFlagSet(0) result: %s",
+        flags ? "true" : "false"
     );
 
-    // --------------------------------------------------------
-    // Layer 4: Secondary base pointer adjustment
-    // --------------------------------------------------------
-
-    LogDiagnostic(
-        LUA,
-        "[diag 5] Before IConVar cast"
-    );
-
-    IConVar* iconvar =
-        static_cast<IConVar*>(convar);
-
-    LogDiagnostic(
-        LUA,
-        "[diag 6] After IConVar cast"
-    );
-
-    LogPointer(
-        LUA,
-        "IConVar secondary pointer",
-        iconvar
-    );
-
-    LogDiagnostic(
-        LUA,
-        "[diag 7] Secondary pointer logged"
-    );
-
-    // --------------------------------------------------------
-    // Layer 5: Pointer adjustment amount
-    // --------------------------------------------------------
-
-    const std::intptr_t convarAddress =
-        reinterpret_cast<std::intptr_t>(convar);
-
-    const std::intptr_t iconvarAddress =
-        reinterpret_cast<std::intptr_t>(iconvar);
-
-    LogInteger(
-        LUA,
-        "IConVar pointer adjustment",
-        static_cast<long long>(
-            iconvarAddress - convarAddress
-        )
-    );
-
-    LogDiagnostic(
-        LUA,
-        "[diag 8] Pointer adjustment calculated"
-    );
-
-    // --------------------------------------------------------
-    // Layer 6: Secondary vtable
-    // --------------------------------------------------------
-
-    DumpVtable(
-        LUA,
-        "IConVar secondary",
-        iconvar,
-        5
-    );
-
-    LogDiagnostic(
-        LUA,
-        "[diag 9] Secondary vtable completed"
-    );
-
-    // --------------------------------------------------------
-    // No virtual calls in this diagnostic pass.
-    // --------------------------------------------------------
-
-    LogDiagnostic(
-        LUA,
-        "[diag 10] Diagnosis completed without virtual calls"
-    );
+    LogDiagnostic(LUA, "[diag] Read-only tests completed");
 
     return 0;
 }
+
 
 // ============================================================
 // Original SetValue function
