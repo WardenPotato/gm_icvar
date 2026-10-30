@@ -939,9 +939,20 @@ LUA_FUNCTION(TestFindVarLiteral)
 
     if (result != nullptr)
     {
-        IConVar* interface = static_cast<IConVar*>(result);
+        IConVar* iconvar =
+            static_cast<IConVar*>(result);
 
-        const char* actualName = interface->GetName();
+        LogDiagnostic(
+            LUA,
+            "[test] Before IConVar::GetName()"
+        );
+
+        const char* actualName = iconvar->GetName();
+
+        LogDiagnostic(
+            LUA,
+            "[test] GetName returned"
+        );
 
         LogDiagnostic(
             LUA,
