@@ -1,4 +1,3 @@
-
 #include <GarrysMod/Lua/Interface.h>
 #include <GarrysMod/FactoryLoader.hpp>
 
@@ -9,11 +8,25 @@
 #include <cstdarg>
 #include <cstdint>
 
-// ============================================================
-// Persistent diagnostic logging
-// ============================================================
-
 static FILE* g_DiagnosticLog = nullptr;
+
+// Forward declaration
+static void LuaPrint(
+    GarrysMod::Lua::ILuaBase* LUA,
+    const char* message
+);
+
+// Actual implementation
+static void LuaPrint(
+    GarrysMod::Lua::ILuaBase* LUA,
+    const char* message)
+{
+    LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
+    LUA->GetField(-1, "print");
+    LUA->PushString(message);
+    LUA->Call(1, 0);
+    LUA->Pop();
+}
 
 static void InitDiagnosticLog()
 {
@@ -72,21 +85,6 @@ static void LogDiagnostic(
 
         std::fflush(g_DiagnosticLog);
     }
-}
-
-// ============================================================
-// Lua output helper
-// ============================================================
-
-static void LuaPrint(
-    GarrysMod::Lua::ILuaBase* LUA,
-    const char* message)
-{
-    LUA->PushSpecial(GarrysMod::Lua::SPECIAL_GLOB);
-    LUA->GetField(-1, "print");
-    LUA->PushString(message);
-    LUA->Call(1, 0);
-    LUA->Pop();
 }
 
 // ============================================================
