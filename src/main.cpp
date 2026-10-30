@@ -604,6 +604,24 @@ LUA_FUNCTION(InspectConVar)
 // This is intentional: previous tests stopped at IsFlagSet.
 // ============================================================
 
+static bool ReadSelfMemory(
+    const void* address,
+    void* output,
+    size_t size)
+{
+    SIZE_T bytesRead = 0;
+
+    const BOOL success = ReadProcessMemory(
+        GetCurrentProcess(),
+        address,
+        output,
+        size,
+        &bytesRead
+    );
+
+    return success && bytesRead == size;
+}
+
 LUA_FUNCTION(DiagnoseConVar)
 {
     LUA->CheckType(
@@ -615,7 +633,7 @@ LUA_FUNCTION(DiagnoseConVar)
 
     LogDiagnostic(
         LUA,
-        "[diag] Starting pointer and module diagnosis"
+        "[diag] Starting internal ConVar memory inspection"
     );
 
     ConVar* convar = GetConvar(name, LUA);
@@ -623,175 +641,191 @@ LUA_FUNCTION(DiagnoseConVar)
     if (convar == nullptr)
         return 0;
 
-    LogDiagnostic(
-        LUA,
-        "[diag] Primary ConVar pointer obtained"
-    );
-
-    LogPointer(
-        LUA,
-        "ConVar primary object",
-        convar
-    );
-
-    void** primaryVtable =
-        *reinterpret_cast<void***>(convar);
-
-    LogPointer(
-        LUA,
-        "ConVar primary vtable",
-        primaryVtable
-    );
-
-    IConVar* iconvar =
-        static_cast<IConVar*>(convar);
-
-    LogDiagnostic(
-        LUA,
-        "[diag] static_cast<IConVar*> completed"
-    );
-
-    LogPointer(
-        LUA,
-        "IConVar secondary object",
-        iconvar
-    );
-
-    const uintptr_t primaryAddress =
+    const uintptr_t primary =
         reinterpret_cast<uintptr_t>(convar);
 
-    const uintptr_t secondaryAddress =
-        reinterpret_cast<uintptr_t>(iconvar);
-
-    LogDiagnostic(
-        LUA,
-        "[diag] Secondary base adjustment: 0x%llX",
-        static_cast<unsigned long long>(
-            secondaryAddress - primaryAddress
-        )
-    );
-
-    void** secondaryVtable =
-        *reinterpret_cast<void***>(iconvar);
-
     LogPointer(
         LUA,
-        "IConVar secondary vtable",
-        secondaryVtable
-    );
-
-    LogDiagnostic(
-        LUA,
-        "[diag] Dumping primary vtable"
-    );
-
-    DumpVtable(
-        LUA,
-        "ConVar primary",
-        convar,
-        20
-    );
-
-    LogDiagnostic(
-        LUA,
-        "[diag] Dumping secondary vtable"
-    );
-
-    DumpVtable(
-        LUA,
-        "IConVar secondary",
-        iconvar,
-        5
-    );
-
-    // Object and vtable module information.
-    LogModuleForAddress(
-        LUA,
-        "ConVar object",
+        "[diag] Primary ConVar",
         convar
     );
 
-    LogModuleForAddress(
+    // --------------------------------------------------------
+    // Read the internal pointer at ConVar + 0x38.
+    //
+    // This offset was identified in the actual engine
+    // instructions for IConVar::GetName and IsFlagSet.
+    // --------------------------------------------------------
+
+    uintptr_t internalAddress = 0;
+
+    const void* internalPointerLocation =
+        reinterpret_cast<const void*>(primary + 0x38);
+
+    LogPointer(
         LUA,
-        "ConVar primary vtable",
-        primaryVtable
+        "[diag] Internal pointer storage",
+        internalPointerLocation
     );
 
-    LogModuleForAddress(
-        LUA,
-        "IConVar object",
-        iconvar
-    );
-
-    LogModuleForAddress(
-        LUA,
-        "IConVar secondary vtable",
-        secondaryVtable
-    );
-
-    // Primary vtable entries relevant to the ConVar interface.
-    LogVtableEntryModule(
-        LUA, "ConVar primary", convar, 18
-    );
-
-    LogVtableEntryModule(
-        LUA, "ConVar primary", convar, 19
-    );
-
-    // Every entry in the secondary IConVar vtable.
-    for (int i = 0; i < 5; ++i)
+    if (!ReadSelfMemory(
+        internalPointerLocation,
+        &internalAddress,
+        sizeof(internalAddress)))
     {
-        LogVtableEntryModule(
+        LogDiagnostic(
             LUA,
-            "IConVar secondary",
-            iconvar,
-            i
+            "[diag] ERROR: Could not read ConVar + 0x38"
+        );
+
+        return 0;
+    }
+
+    void* internal = reinterpret_cast<void*>(
+        internalAddress
+    );
+
+    LogPointer(
+        LUA,
+        "[diag] Internal object",
+        internal
+    );
+
+    if (internal == nullptr)
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] ERROR: Internal object pointer is null"
+        );
+
+        return 0;
+    }
+
+    // --------------------------------------------------------
+    // Read the name pointer at internal + 0x18.
+    // --------------------------------------------------------
+
+    uintptr_t nameAddress = 0;
+
+    const void* namePointerLocation =
+        reinterpret_cast<const void*>(
+            internalAddress + 0x18
+        );
+
+    if (ReadSelfMemory(
+        namePointerLocation,
+        &nameAddress,
+        sizeof(nameAddress)))
+    {
+        const char* namePointer =
+            reinterpret_cast<const char*>(nameAddress);
+
+        LogPointer(
+            LUA,
+            "[diag] Internal name pointer",
+            namePointer
+        );
+
+        if (namePointer != nullptr)
+        {
+            char nameBuffer[128] = {};
+            size_t length = 0;
+
+            for (; length < sizeof(nameBuffer) - 1; ++length)
+            {
+                char character = '\0';
+
+                if (!ReadSelfMemory(
+                    namePointer + length,
+                    &character,
+                    sizeof(character)))
+                {
+                    LogDiagnostic(
+                        LUA,
+                        "[diag] Name read stopped at byte %llu",
+                        static_cast<unsigned long long>(length)
+                    );
+
+                    break;
+                }
+
+                nameBuffer[length] = character;
+
+                if (character == '\0')
+                    break;
+            }
+
+            LogDiagnostic(
+                LUA,
+                "[diag] Internal name string: '%s'",
+                nameBuffer
+            );
+        }
+    }
+    else
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] ERROR: Could not read internal + 0x18"
         );
     }
 
-    // ICvar interface module information.
-    ICvar* icvar = GetICvar(LUA);
+    // --------------------------------------------------------
+    // Read flags at internal + 0x28.
+    //
+    // IsFlagSet performs this exact memory access.
+    // --------------------------------------------------------
 
-    if (icvar != nullptr)
+    uint32_t flags = 0;
+
+    const void* flagsLocation =
+        reinterpret_cast<const void*>(
+            internalAddress + 0x28
+        );
+
+    LogPointer(
+        LUA,
+        "[diag] Flags storage",
+        flagsLocation
+    );
+
+    if (ReadSelfMemory(
+        flagsLocation,
+        &flags,
+        sizeof(flags)))
     {
-        void** icvarVtable =
-            *reinterpret_cast<void***>(icvar);
-
-        LogModuleForAddress(
+        LogDiagnostic(
             LUA,
-            "ICvar object",
-            icvar
+            "[diag] Flags successfully read: 0x%08X",
+            static_cast<unsigned int>(flags)
         );
 
-        LogModuleForAddress(
+        LogDiagnostic(
             LUA,
-            "ICvar vtable",
-            icvarVtable
+            "[diag] IsFlagSet(0) expected result: false"
         );
 
-        LogVtableEntryModule(
+        LogDiagnostic(
             LUA,
-            "ICvar",
-            icvar,
-            12
+            "[diag] IsFlagSet(1) expected result: %s",
+            (flags & 1) != 0 ? "true" : "false"
         );
-
-        LogVtableEntryModule(
+    }
+    else
+    {
+        LogDiagnostic(
             LUA,
-            "ICvar",
-            icvar,
-            13
+            "[diag] ERROR: Could not read internal + 0x28"
         );
     }
 
     LogDiagnostic(
         LUA,
-        "[diag] Pointer and module diagnosis completed"
+        "[diag] Internal memory inspection completed"
     );
 
     return 0;
 }
-
 // ============================================================
 // Original SetValue function
 //
