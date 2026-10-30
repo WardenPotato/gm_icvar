@@ -611,15 +611,293 @@ static bool ReadSelfMemory(
 {
     SIZE_T bytesRead = 0;
 
-    const BOOL success = ReadProcessMemory(
+    return ReadProcessMemory(
         GetCurrentProcess(),
         address,
         output,
         size,
         &bytesRead
+    ) && bytesRead == size;
+}
+
+static void LogMemoryString(
+    GarrysMod::Lua::ILuaBase* LUA,
+    const char* label,
+    uintptr_t address)
+{
+    if (address == 0)
+    {
+        LogDiagnostic(LUA, "[diag] %s: nullptr", label);
+        return;
+    }
+
+    char text[128] = {};
+    char hex[64] = {};
+
+    bool readable = true;
+    bool terminated = false;
+
+    for (size_t i = 0; i < sizeof(text) - 1; ++i)
+    {
+        char ch = '\0';
+
+        if (!ReadSelfMemory(
+            reinterpret_cast<const void*>(address + i),
+            &ch,
+            sizeof(ch)))
+        {
+            readable = false;
+            break;
+        }
+
+        text[i] = ch;
+
+        if (ch == '\0')
+        {
+            terminated = true;
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < 16; ++i)
+    {
+        unsigned char byte = 0;
+
+        if (!ReadSelfMemory(
+            reinterpret_cast<const void*>(address + i),
+            &byte,
+            sizeof(byte)))
+        {
+            std::snprintf(
+                hex + i * 3,
+                sizeof(hex) - i * 3,
+                "?? "
+            );
+            continue;
+        }
+
+        std::snprintf(
+            hex + i * 3,
+            sizeof(hex) - i * 3,
+            "%02X ",
+            static_cast<unsigned int>(byte)
+        );
+    }
+
+    LogDiagnostic(
+        LUA,
+        "[diag] %s pointer=%p",
+        label,
+        reinterpret_cast<const void*>(address)
     );
 
-    return success && bytesRead == size;
+    LogDiagnostic(
+        LUA,
+        "[diag] %s text='%s' readable=%s terminated=%s",
+        label,
+        text,
+        readable ? "yes" : "no",
+        terminated ? "yes" : "no"
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[diag] %s bytes: %s",
+        label,
+        hex
+    );
+}
+
+static void InspectNameFields(
+    GarrysMod::Lua::ILuaBase* LUA,
+    const char* label,
+    const void* object)
+{
+    if (object == nullptr)
+        return;
+
+    const uintptr_t address =
+        reinterpret_cast<uintptr_t>(object);
+
+    uintptr_t owner = 0;
+
+    if (!ReadSelfMemory(
+        reinterpret_cast<const void*>(address + 0x38),
+        &owner,
+        sizeof(owner)))
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] %s: unable to read owner at +0x38",
+            label
+        );
+        return;
+    }
+
+    LogDiagnostic(
+        LUA,
+        "[diag] %s owner=%p",
+        label,
+        reinterpret_cast<void*>(owner)
+    );
+
+    if (owner == 0)
+        return;
+
+    uintptr_t namePointer = 0;
+
+    if (!ReadSelfMemory(
+        reinterpret_cast<const void*>(owner + 0x18),
+        &namePointer,
+        sizeof(namePointer)))
+    {
+        LogDiagnostic(
+            LUA,
+            "[diag] %s: unable to read name pointer",
+            label
+        );
+        return;
+    }
+
+    LogMemoryString(
+        LUA,
+        label,
+        namePointer
+    );
+}
+
+
+LUA_FUNCTION(DiagnoseLookup)
+{
+    ICvar* icvar = GetICvar(LUA);
+
+    if (icvar == nullptr)
+        return 0;
+
+    const ICvar* constICvar = icvar;
+
+    static const char* names[] =
+    {
+        "r_3dsky",
+        "r_spewleaf"
+    };
+
+    for (const char* requested : names)
+    {
+        LogDiagnostic(
+            LUA,
+            "========== LOOKUP: %s ==========",
+            requested
+        );
+
+        // Non-const FindCommandBase.
+        ConCommandBase* base =
+            icvar->FindCommandBase(requested);
+
+        LogPointer(
+            LUA,
+            "[lookup] FindCommandBase",
+            base
+        );
+
+        // Non-const FindVar.
+        ConVar* var =
+            icvar->FindVar(requested);
+
+        LogPointer(
+            LUA,
+            "[lookup] FindVar",
+            var
+        );
+
+        // Const overloads.
+        const ConCommandBase* constBase =
+            constICvar->FindCommandBase(requested);
+
+        const ConVar* constVar =
+            constICvar->FindVar(requested);
+
+        LogPointer(
+            LUA,
+            "[lookup] const FindCommandBase",
+            constBase
+        );
+
+        LogPointer(
+            LUA,
+            "[lookup] const FindVar",
+            constVar
+        );
+
+        // Inspect the names stored in each returned object.
+        InspectNameFields(
+            LUA,
+            "[lookup] FindCommandBase name",
+            base
+        );
+
+        InspectNameFields(
+            LUA,
+            "[lookup] FindVar name",
+            var
+        );
+
+        InspectNameFields(
+            LUA,
+            "[lookup] const FindCommandBase name",
+            constBase
+        );
+
+        InspectNameFields(
+            LUA,
+            "[lookup] const FindVar name",
+            constVar
+        );
+
+        // Compare primary and secondary GetName calls.
+        if (var != nullptr)
+        {
+            const ConCommandBase* primary =
+                static_cast<const ConCommandBase*>(var);
+
+            const IConVar* secondary =
+                static_cast<const IConVar*>(var);
+
+            const char* primaryName = primary->GetName();
+            const char* secondaryName = secondary->GetName();
+
+            LogPointer(
+                LUA,
+                "[lookup] Primary GetName result",
+                primaryName
+            );
+
+            LogPointer(
+                LUA,
+                "[lookup] Secondary GetName result",
+                secondaryName
+            );
+
+            LogMemoryString(
+                LUA,
+                "[lookup] Primary virtual name",
+                reinterpret_cast<uintptr_t>(primaryName)
+            );
+
+            LogMemoryString(
+                LUA,
+                "[lookup] Secondary virtual name",
+                reinterpret_cast<uintptr_t>(secondaryName)
+            );
+        }
+    }
+
+    LogDiagnostic(
+        LUA,
+        "[lookup] Lookup diagnosis completed"
+    );
+
+    return 0;
 }
 
 LUA_FUNCTION(DiagnoseConVar)
@@ -997,6 +1275,9 @@ GMOD_MODULE_OPEN()
 
     LUA->PushCFunction(TestFindVarLiteral);
     LUA->SetField(-2, "TestFindVarLiteral");
+
+    LUA->PushCFunction(DiagnoseLookup);
+    LUA->SetField(-2, "DiagnoseLookup");
 
     LUA->SetField(-2, "icvar");
 
