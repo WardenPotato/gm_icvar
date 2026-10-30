@@ -774,7 +774,59 @@ LUA_FUNCTION(DiagnoseLookup)
     if (icvar == nullptr)
         return 0;
 
-    const ICvar* constICvar = icvar;
+    using RawLookupFn = void* (*)(
+        void* self,
+        const char* name
+    );
+
+    using RawGetNameFn = const char* (*)(
+        void* self
+    );
+
+    void** icvarVtable =
+        *reinterpret_cast<void***>(icvar);
+
+    LogDiagnostic(
+        LUA,
+        "[raw] ICvar object: %p",
+        static_cast<void*>(icvar)
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[raw] ICvar vtable: %p",
+        static_cast<void*>(icvarVtable)
+    );
+
+    // These are the slots identified in the supplied
+    // vstdlib.dll:
+    //
+    // 10 = FindCommandBase
+    // 11 = FindCommandBase const
+    // 12 = FindVar
+    // 13 = FindVar const
+
+    for (int i = 10; i <= 13; ++i)
+    {
+        LogDiagnostic(
+            LUA,
+            "[raw] ICvar vtable[%d] = %p",
+            i,
+            icvarVtable[i]
+        );
+    }
+
+    RawLookupFn raw10 =
+        reinterpret_cast<RawLookupFn>(icvarVtable[10]);
+
+    RawLookupFn raw11 =
+        reinterpret_cast<RawLookupFn>(icvarVtable[11]);
+
+    RawLookupFn raw12 =
+        reinterpret_cast<RawLookupFn>(icvarVtable[12]);
+
+    RawLookupFn raw13 =
+        reinterpret_cast<RawLookupFn>(icvarVtable[13]);
 
     static const char* names[] =
     {
@@ -786,120 +838,190 @@ LUA_FUNCTION(DiagnoseLookup)
     {
         LogDiagnostic(
             LUA,
-            "========== LOOKUP: %s ==========",
+            "========== RAW LOOKUP: %s ==========",
             requested
         );
 
-        // Non-const FindCommandBase.
-        ConCommandBase* base =
+        // ----------------------------------------------------
+        // Calls through the C++ declarations.
+        // ----------------------------------------------------
+
+        LogDiagnostic(
+            LUA,
+            "[raw] Before typed FindCommandBase"
+        );
+
+        ConCommandBase* typedBase =
             icvar->FindCommandBase(requested);
 
         LogPointer(
             LUA,
-            "[lookup] FindCommandBase",
-            base
+            "[raw] Typed FindCommandBase",
+            typedBase
         );
 
-        // Non-const FindVar.
-        ConVar* var =
+        LogDiagnostic(
+            LUA,
+            "[raw] Before typed FindVar"
+        );
+
+        ConVar* typedVar =
             icvar->FindVar(requested);
 
         LogPointer(
             LUA,
-            "[lookup] FindVar",
-            var
+            "[raw] Typed FindVar",
+            typedVar
         );
 
-        // Const overloads.
-        const ConCommandBase* constBase =
-            constICvar->FindCommandBase(requested);
+        // ----------------------------------------------------
+        // Direct vtable calls.
+        // ----------------------------------------------------
 
-        const ConVar* constVar =
-            constICvar->FindVar(requested);
+        LogDiagnostic(
+            LUA,
+            "[raw] Calling slot 10"
+        );
+
+        void* result10 = raw10(icvar, requested);
 
         LogPointer(
             LUA,
-            "[lookup] const FindCommandBase",
-            constBase
+            "[raw] Slot 10 result",
+            result10
         );
+
+        LogDiagnostic(
+            LUA,
+            "[raw] Calling slot 11"
+        );
+
+        void* result11 = raw11(icvar, requested);
 
         LogPointer(
             LUA,
-            "[lookup] const FindVar",
-            constVar
+            "[raw] Slot 11 result",
+            result11
         );
 
-        // Inspect the names stored in each returned object.
-        InspectNameFields(
+        LogDiagnostic(
             LUA,
-            "[lookup] FindCommandBase name",
-            base
+            "[raw] Calling slot 12"
         );
 
-        InspectNameFields(
+        void* result12 = raw12(icvar, requested);
+
+        LogPointer(
             LUA,
-            "[lookup] FindVar name",
-            var
+            "[raw] Slot 12 result",
+            result12
         );
 
-        InspectNameFields(
+        LogDiagnostic(
             LUA,
-            "[lookup] const FindCommandBase name",
-            constBase
+            "[raw] Calling slot 13"
         );
 
-        InspectNameFields(
+        void* result13 = raw13(icvar, requested);
+
+        LogPointer(
             LUA,
-            "[lookup] const FindVar name",
-            constVar
+            "[raw] Slot 13 result",
+            result13
         );
 
-        // Compare primary and secondary GetName calls.
-        if (var != nullptr)
+        // ----------------------------------------------------
+        // Inspect the name of the object returned by slot 12.
+        // ----------------------------------------------------
+
+        if (result12 != nullptr)
         {
-            const ConCommandBase* primary =
-                static_cast<const ConCommandBase*>(var);
+            void** primaryVtable =
+                *reinterpret_cast<void***>(result12);
 
-            const IConVar* secondary =
-                static_cast<const IConVar*>(var);
+            RawGetNameFn primaryGetName =
+                reinterpret_cast<RawGetNameFn>(
+                    primaryVtable[4]
+                );
 
-            const char* primaryName = primary->GetName();
-            const char* secondaryName = secondary->GetName();
+            LogDiagnostic(
+                LUA,
+                "[raw] Primary vtable[4]: %p",
+                primaryVtable[4]
+            );
+
+            const char* primaryName =
+                primaryGetName(result12);
 
             LogPointer(
                 LUA,
-                "[lookup] Primary GetName result",
+                "[raw] Raw primary GetName result",
                 primaryName
             );
 
+            if (primaryName != nullptr)
+            {
+                LogMemoryString(
+                    LUA,
+                    "[raw] Raw primary name",
+                    reinterpret_cast<uintptr_t>(primaryName)
+                );
+            }
+
+            // The secondary IConVar base is at +0x30
+            // in the object layout observed so far.
+            IConVar* iconvar =
+                static_cast<IConVar*>(
+                    static_cast<ConVar*>(result12)
+                );
+
+            void** secondaryVtable =
+                *reinterpret_cast<void***>(iconvar);
+
+            RawGetNameFn secondaryGetName =
+                reinterpret_cast<RawGetNameFn>(
+                    secondaryVtable[3]
+                );
+
+            LogDiagnostic(
+                LUA,
+                "[raw] Secondary vtable[3]: %p",
+                secondaryVtable[3]
+            );
+
+            const char* secondaryName =
+                secondaryGetName(iconvar);
+
             LogPointer(
                 LUA,
-                "[lookup] Secondary GetName result",
+                "[raw] Raw secondary GetName result",
                 secondaryName
             );
 
-            LogMemoryString(
-                LUA,
-                "[lookup] Primary virtual name",
-                reinterpret_cast<uintptr_t>(primaryName)
-            );
+            if (secondaryName != nullptr)
+            {
+                LogMemoryString(
+                    LUA,
+                    "[raw] Raw secondary name",
+                    reinterpret_cast<uintptr_t>(secondaryName)
+                );
+            }
 
-            LogMemoryString(
+            InspectNameFields(
                 LUA,
-                "[lookup] Secondary virtual name",
-                reinterpret_cast<uintptr_t>(secondaryName)
+                "[raw] Object name field",
+                result12
             );
         }
     }
 
     LogDiagnostic(
         LUA,
-        "[lookup] Lookup diagnosis completed"
+        "[raw] Raw ABI diagnosis completed"
     );
 
     return 0;
 }
-
 LUA_FUNCTION(DiagnoseConVar)
 {
     LUA->CheckType(
