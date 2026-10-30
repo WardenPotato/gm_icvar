@@ -1,12 +1,19 @@
+
 #include <GarrysMod/Lua/Interface.h>
 #include <GarrysMod/FactoryLoader.hpp>
 
 #include <icvar.h>
 #include "convar.h"
 
+#include <Windows.h>
+
 #include <cstdio>
 #include <cstdarg>
 #include <cstdint>
+
+// ============================================================
+// Global diagnostic log
+// ============================================================
 
 static FILE* g_DiagnosticLog = nullptr;
 
@@ -16,7 +23,10 @@ static void LuaPrint(
     const char* message
 );
 
-// Actual implementation
+// ============================================================
+// Lua printing
+// ============================================================
+
 static void LuaPrint(
     GarrysMod::Lua::ILuaBase* LUA,
     const char* message)
@@ -27,6 +37,10 @@ static void LuaPrint(
     LUA->Call(1, 0);
     LUA->Pop();
 }
+
+// ============================================================
+// Persistent logging
+// ============================================================
 
 static void InitDiagnosticLog()
 {
@@ -68,11 +82,9 @@ static void LogDiagnostic(
 
     va_end(args);
 
-    // In-game output.
     if (LUA != nullptr)
         LuaPrint(LUA, message);
 
-    // Persistent output.
     InitDiagnosticLog();
 
     if (g_DiagnosticLog != nullptr)
@@ -104,24 +116,120 @@ static void LogPointer(
     );
 }
 
-static void LogInteger(
+// ============================================================
+// Module identification
+//
+// Finds the module containing an address and calculates
+// the address RVA relative to that module's loaded base.
+//
+// Does not require Psapi.lib.
+// ============================================================
+
+static void LogModuleForAddress(
     GarrysMod::Lua::ILuaBase* LUA,
     const char* label,
-    long long value)
+    const void* address)
 {
     LogDiagnostic(
         LUA,
-        "[icvar] %s = %lld",
+        "[module] Inspecting %s",
+        label
+    );
+
+    if (address == nullptr)
+    {
+        LogDiagnostic(
+            LUA,
+            "[module] %s: address is null",
+            label
+        );
+
+        return;
+    }
+
+    HMODULE module = nullptr;
+
+    const BOOL success = GetModuleHandleExA(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCSTR>(address),
+        &module
+    );
+
+    if (!success || module == nullptr)
+    {
+        const DWORD error = GetLastError();
+
+        LogDiagnostic(
+            LUA,
+            "[module] %s: GetModuleHandleExA failed, error=%lu",
+            label,
+            static_cast<unsigned long>(error)
+        );
+
+        return;
+    }
+
+    char path[MAX_PATH] = {};
+
+    const DWORD pathLength = GetModuleFileNameA(
+        module,
+        path,
+        MAX_PATH
+    );
+
+    if (pathLength == 0)
+    {
+        LogDiagnostic(
+            LUA,
+            "[module] %s: GetModuleFileNameA failed, error=%lu",
+            label,
+            static_cast<unsigned long>(GetLastError())
+        );
+    }
+
+    const uintptr_t base =
+        reinterpret_cast<uintptr_t>(module);
+
+    const uintptr_t addr =
+        reinterpret_cast<uintptr_t>(address);
+
+    const uintptr_t rva = addr - base;
+
+    LogDiagnostic(
+        LUA,
+        "[module] %s path: %s",
         label,
-        value
+        pathLength != 0 ? path : "<unavailable>"
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[module] %s base: %p",
+        label,
+        module
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[module] %s address: %p",
+        label,
+        address
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[module] %s RVA: 0x%llX",
+        label,
+        static_cast<unsigned long long>(rva)
     );
 }
 
 // ============================================================
 // Vtable inspection
 //
-// This reads the object's vtable pointer and a bounded number
-// of entries. It does not invoke any virtual functions.
+// Reads the object's vtable pointer and a bounded number
+// of entries. Does not invoke virtual functions.
 // ============================================================
 
 static void DumpVtable(
@@ -146,12 +254,6 @@ static void DumpVtable(
 
         return;
     }
-
-    LogDiagnostic(
-        LUA,
-        "[diag] Reading vtable pointer for %s",
-        label
-    );
 
     void** vtable = *reinterpret_cast<void***>(
         const_cast<void*>(object)
@@ -191,6 +293,45 @@ static void DumpVtable(
         LUA,
         "[diag] Finished vtable inspection: %s",
         label
+    );
+}
+
+// ============================================================
+// Inspect a vtable entry's containing module
+// ============================================================
+
+static void LogVtableEntryModule(
+    GarrysMod::Lua::ILuaBase* LUA,
+    const char* label,
+    const void* object,
+    int index)
+{
+    if (object == nullptr)
+        return;
+
+    void** vtable = *reinterpret_cast<void***>(
+        const_cast<void*>(object)
+    );
+
+    if (vtable == nullptr)
+        return;
+
+    void* entry = vtable[index];
+
+    char entryLabel[128];
+
+    std::snprintf(
+        entryLabel,
+        sizeof(entryLabel),
+        "%s vtable[%d]",
+        label,
+        index
+    );
+
+    LogModuleForAddress(
+        LUA,
+        entryLabel,
+        entry
     );
 }
 
@@ -258,7 +399,7 @@ static ICvar* GetICvar(
 }
 
 // ============================================================
-// Find a convar
+// Find a ConVar
 // ============================================================
 
 static ConVar* GetConvar(
@@ -287,7 +428,6 @@ static ConVar* GetConvar(
         name
     );
 
-    // This is the first engine virtual call in this function.
     ConVar* convar = icvar->FindVar(name);
 
     LogPointer(
@@ -381,6 +521,18 @@ LUA_FUNCTION(ListCvarInterfaces)
                     interfacePointer,
                     24
                 );
+
+                LogModuleForAddress(
+                    LUA,
+                    "ICvar object",
+                    interfacePointer
+                );
+
+                LogModuleForAddress(
+                    LUA,
+                    "ICvar vtable",
+                    *reinterpret_cast<void**>(interfacePointer)
+                );
             }
         }
     }
@@ -425,6 +577,18 @@ LUA_FUNCTION(InspectConVar)
         20
     );
 
+    LogModuleForAddress(
+        LUA,
+        "ConVar object",
+        convar
+    );
+
+    LogModuleForAddress(
+        LUA,
+        "ConVar primary vtable",
+        *reinterpret_cast<void**>(convar)
+    );
+
     LogDiagnostic(
         LUA,
         "[icvar] Primary inspection completed"
@@ -434,67 +598,205 @@ LUA_FUNCTION(InspectConVar)
 }
 
 // ============================================================
-// Diagnose primary and secondary interface pointers
+// Diagnose ConVar and IConVar layout
 //
-// IMPORTANT:
-// - Does not call GetName().
-// - Does not call IsFlagSet().
-// - Does not call SetValue().
-// - Logs every checkpoint to disk.
+// No virtual methods are invoked here.
+// This is intentional: previous tests stopped at IsFlagSet.
 // ============================================================
-
 
 LUA_FUNCTION(DiagnoseConVar)
 {
-    LUA->CheckType(1, GarrysMod::Lua::Type::STRING);
+    LUA->CheckType(
+        1,
+        GarrysMod::Lua::Type::STRING
+    );
 
     const char* name = LUA->GetString(1);
 
-    LogDiagnostic(LUA, "[diag] Starting read-only virtual tests");
+    LogDiagnostic(
+        LUA,
+        "[diag] Starting pointer and module diagnosis"
+    );
 
     ConVar* convar = GetConvar(name, LUA);
 
     if (convar == nullptr)
         return 0;
 
-    LogDiagnostic(LUA, "[diag] Before IConVar cast");
+    LogDiagnostic(
+        LUA,
+        "[diag] Primary ConVar pointer obtained"
+    );
 
-    IConVar* iconvar = static_cast<IConVar*>(convar);
+    LogPointer(
+        LUA,
+        "ConVar primary object",
+        convar
+    );
 
-    LogPointer(LUA, "IConVar pointer", iconvar);
+    void** primaryVtable =
+        *reinterpret_cast<void***>(convar);
 
-    LogDiagnostic(LUA, "[diag] Before GetName()");
+    LogPointer(
+        LUA,
+        "ConVar primary vtable",
+        primaryVtable
+    );
 
-    const char* actualName = iconvar->GetName();
-
-    LogDiagnostic(LUA, "[diag] GetName() returned");
+    IConVar* iconvar =
+        static_cast<IConVar*>(convar);
 
     LogDiagnostic(
         LUA,
-        "[diag] GetName result: %s",
-        actualName != nullptr ? actualName : "<null>"
+        "[diag] static_cast<IConVar*> completed"
     );
 
-    LogDiagnostic(LUA, "[diag] Before IsFlagSet(0)");
+    LogPointer(
+        LUA,
+        "IConVar secondary object",
+        iconvar
+    );
 
-    const bool flags = iconvar->IsFlagSet(0);
+    const uintptr_t primaryAddress =
+        reinterpret_cast<uintptr_t>(convar);
 
-    LogDiagnostic(LUA, "[diag] IsFlagSet(0) returned");
+    const uintptr_t secondaryAddress =
+        reinterpret_cast<uintptr_t>(iconvar);
 
     LogDiagnostic(
         LUA,
-        "[diag] IsFlagSet(0) result: %s",
-        flags ? "true" : "false"
+        "[diag] Secondary base adjustment: 0x%llX",
+        static_cast<unsigned long long>(
+            secondaryAddress - primaryAddress
+        )
     );
 
-    LogDiagnostic(LUA, "[diag] Read-only tests completed");
+    void** secondaryVtable =
+        *reinterpret_cast<void***>(iconvar);
+
+    LogPointer(
+        LUA,
+        "IConVar secondary vtable",
+        secondaryVtable
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[diag] Dumping primary vtable"
+    );
+
+    DumpVtable(
+        LUA,
+        "ConVar primary",
+        convar,
+        20
+    );
+
+    LogDiagnostic(
+        LUA,
+        "[diag] Dumping secondary vtable"
+    );
+
+    DumpVtable(
+        LUA,
+        "IConVar secondary",
+        iconvar,
+        5
+    );
+
+    // Object and vtable module information.
+    LogModuleForAddress(
+        LUA,
+        "ConVar object",
+        convar
+    );
+
+    LogModuleForAddress(
+        LUA,
+        "ConVar primary vtable",
+        primaryVtable
+    );
+
+    LogModuleForAddress(
+        LUA,
+        "IConVar object",
+        iconvar
+    );
+
+    LogModuleForAddress(
+        LUA,
+        "IConVar secondary vtable",
+        secondaryVtable
+    );
+
+    // Primary vtable entries relevant to the ConVar interface.
+    LogVtableEntryModule(
+        LUA, "ConVar primary", convar, 18
+    );
+
+    LogVtableEntryModule(
+        LUA, "ConVar primary", convar, 19
+    );
+
+    // Every entry in the secondary IConVar vtable.
+    for (int i = 0; i < 5; ++i)
+    {
+        LogVtableEntryModule(
+            LUA,
+            "IConVar secondary",
+            iconvar,
+            i
+        );
+    }
+
+    // ICvar interface module information.
+    ICvar* icvar = GetICvar(LUA);
+
+    if (icvar != nullptr)
+    {
+        void** icvarVtable =
+            *reinterpret_cast<void***>(icvar);
+
+        LogModuleForAddress(
+            LUA,
+            "ICvar object",
+            icvar
+        );
+
+        LogModuleForAddress(
+            LUA,
+            "ICvar vtable",
+            icvarVtable
+        );
+
+        LogVtableEntryModule(
+            LUA,
+            "ICvar",
+            icvar,
+            12
+        );
+
+        LogVtableEntryModule(
+            LUA,
+            "ICvar",
+            icvar,
+            13
+        );
+    }
+
+    LogDiagnostic(
+        LUA,
+        "[diag] Pointer and module diagnosis completed"
+    );
 
     return 0;
 }
 
-
 // ============================================================
 // Original SetValue function
+//
+// Leave this registered for now, but do not use it during
+// the current ABI investigation.
 // ============================================================
 
 LUA_FUNCTION(SetValue)
